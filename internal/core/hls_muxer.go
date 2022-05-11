@@ -353,14 +353,13 @@ func (m *hlsMuxer) runInner(innerCtx context.Context, innerReady chan struct{}) 
 						continue
 					}
 
-					// video is decoded in another routine,
-					// while audio is decoded in this routine:
-					// we have to sync their PTS.
 					if videoInitialPTS == nil {
 						v := data.h264PTS
 						videoInitialPTS = &v
 					}
 					pts := data.h264PTS - *videoInitialPTS
+
+					fmt.Println("VID", pts)
 
 					err = m.muxer.WriteH264(pts, data.h264NALUs)
 					if err != nil {
@@ -368,6 +367,11 @@ func (m *hlsMuxer) runInner(innerCtx context.Context, innerReady chan struct{}) 
 						continue
 					}
 				} else if audioTrack != nil && data.trackID == audioTrackID {
+					// wait video to avoid desync between video and audio DTS
+					//if videoTrack != nil && videoInitialPTS == nil {
+					//	continue
+					//}
+
 					aus, pts, err := aacDecoder.Decode(data.rtp)
 					if err != nil {
 						if err != rtpaac.ErrMorePacketsNeeded {
@@ -375,6 +379,8 @@ func (m *hlsMuxer) runInner(innerCtx context.Context, innerReady chan struct{}) 
 						}
 						continue
 					}
+
+					fmt.Println("AUD", pts)
 
 					err = m.muxer.WriteAAC(pts, aus)
 					if err != nil {

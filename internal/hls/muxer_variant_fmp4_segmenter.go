@@ -2,6 +2,7 @@ package hls
 
 import (
 	"bytes"
+	"fmt"
 	"time"
 
 	"github.com/aler9/gortsplib"
@@ -48,6 +49,11 @@ func newMuxerVariantFMP4Segmenter(
 }
 
 func (m *muxerVariantFMP4Segmenter) reset() {
+	_, err := m.currentSegment.finalize()
+	if err == nil {
+		m.onSegmentFinalized(m.currentSegment)
+	}
+
 	m.currentSegment = nil
 	m.startPTS = 0
 	m.lastSPS = nil
@@ -110,7 +116,7 @@ func (m *muxerVariantFMP4Segmenter) writeH264(pts time.Duration, nalus [][]byte)
 			if (pts-m.currentSegment.startDTS) >= m.segmentDuration ||
 				!bytes.Equal(m.lastSPS, sps) ||
 				!bytes.Equal(m.lastPPS, pps) {
-				err := m.currentSegment.finalize()
+				residualAudioEntries, err := m.currentSegment.finalize()
 				if err != nil {
 					return err
 				}
@@ -132,18 +138,19 @@ func (m *muxerVariantFMP4Segmenter) writeH264(pts time.Duration, nalus [][]byte)
 				if err != nil {
 					return err
 				}
+
+				for _, entry := range residualAudioEntries {
+					err := m.currentSegment.writeAAC(entry.pts, [][]byte{entry.au})
+					if err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}
 
 	err := m.currentSegment.writeH264(pts, nalus)
 	if err != nil {
-		err := m.currentSegment.finalize()
-		if err != nil {
-			return err
-		}
-		m.onSegmentFinalized(m.currentSegment)
-
 		m.reset()
 		return err
 	}
@@ -181,7 +188,7 @@ func (m *muxerVariantFMP4Segmenter) writeAAC(pts time.Duration, aus [][]byte) er
 			// switch segment
 			if m.currentSegment.audioEntriesCount >= segmentMinAUCount &&
 				(pts-m.currentSegment.startDTS) >= m.segmentDuration {
-				err := m.currentSegment.finalize()
+				_, err := m.currentSegment.finalize()
 				if err != nil {
 					return err
 				}
@@ -210,16 +217,11 @@ func (m *muxerVariantFMP4Segmenter) writeAAC(pts time.Duration, aus [][]byte) er
 		}
 
 		pts -= m.startPTS
+		fmt.Println("AUD PTS", pts)
 	}
 
 	err := m.currentSegment.writeAAC(pts, aus)
 	if err != nil {
-		err := m.currentSegment.finalize()
-		if err != nil {
-			return err
-		}
-		m.onSegmentFinalized(m.currentSegment)
-
 		m.reset()
 		return err
 	}

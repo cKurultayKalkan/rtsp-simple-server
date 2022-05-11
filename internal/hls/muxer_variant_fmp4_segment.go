@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aler9/gortsplib"
+	"github.com/aler9/gortsplib/pkg/aac"
 	"github.com/aler9/gortsplib/pkg/h264"
 )
 
@@ -112,10 +113,10 @@ func (s *muxerVariantFMP4Segment) reader() io.Reader {
 	return &partsReader{parts: s.parts}
 }
 
-func (s *muxerVariantFMP4Segment) finalize() error {
-	err := s.currentPart.finalize()
+func (s *muxerVariantFMP4Segment) finalize() ([]fmp4PartAudioEntry, error) {
+	residualAudioEntries, err := s.currentPart.finalize()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	s.onPartFinalized(s.currentPart)
@@ -125,10 +126,10 @@ func (s *muxerVariantFMP4Segment) finalize() error {
 	if s.videoTrack != nil {
 		s.duration = time.Duration(s.videoEntriesCount) * s.sampleDuration
 	} else {
-		s.duration = time.Duration(s.audioEntriesCount) * 1024 * time.Second / time.Duration(s.audioTrack.ClockRate())
+		s.duration = time.Duration(s.audioEntriesCount) * aac.SamplesPerAccessUnit * time.Second / time.Duration(s.audioTrack.ClockRate())
 	}
 
-	return nil
+	return residualAudioEntries, nil
 }
 
 func (s *muxerVariantFMP4Segment) writeH264(
@@ -153,8 +154,8 @@ func (s *muxerVariantFMP4Segment) writeH264(
 	s.entriesSize += size
 
 	if s.lowLatency && len(s.currentPart.videoEntries) > 5 &&
-		(s.audioTrack == nil || len(s.currentPart.audioEntries) > 5) {
-		err := s.currentPart.finalize()
+		(s.audioTrack == nil || len(s.currentPart.audioEntries) > 30) {
+		residualAudioEntries, err := s.currentPart.finalize()
 		if err != nil {
 			return err
 		}
@@ -169,6 +170,14 @@ func (s *muxerVariantFMP4Segment) writeH264(
 			s.startDTS+time.Duration(s.videoEntriesCount)*s.sampleDuration,
 			s.sampleDuration,
 		)
+
+		for _, entry := range residualAudioEntries {
+			fmt.Println("RESI")
+			err := s.currentPart.writeAAC(entry.pts, [][]byte{entry.au})
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
@@ -197,7 +206,7 @@ func (s *muxerVariantFMP4Segment) writeAAC(
 
 	if s.lowLatency && s.videoTrack == nil &&
 		len(s.currentPart.audioEntries) > 30 {
-		err := s.currentPart.finalize()
+		_, err := s.currentPart.finalize()
 		if err != nil {
 			return err
 		}
@@ -209,7 +218,7 @@ func (s *muxerVariantFMP4Segment) writeAAC(
 			s.videoTrack,
 			s.audioTrack,
 			s.genPartID(),
-			s.startDTS+time.Duration(s.audioEntriesCount)*1024*time.Second/time.Duration(s.audioTrack.ClockRate()),
+			s.startDTS+time.Duration(s.audioEntriesCount)*aac.SamplesPerAccessUnit*time.Second/time.Duration(s.audioTrack.ClockRate()),
 			s.sampleDuration,
 		)
 	}
